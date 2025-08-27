@@ -1,0 +1,169 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "nexusforge-quantum-finance"
+version = "1.0.0"
+description = "Ultimate AI-Powered Quantum Finance Framework"
+authors = ["NexusForge Team <team@nexusforge.io>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/yourusernamehere/nexusforge-quantum-finance"
+repository = "https://github.com/yourusernamehere/nexusforge-quantum-finance"
+documentation = "https://docs.nexusforge.io"
+keywords = ["finance", "quantum", "monte-carlo", "ai", "trading", "risk", "esg"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Office/Business :: Financial",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^1.24.0"
+pandas = "^2.0.0"
+scipy = "^1.10.0"
+scikit-learn = "^1.3.0"
+torch = "^2.1.0"
+transformers = "^4.35.0"
+fastapi = "^0.104.0"
+uvicorn = "^0.24.0"
+streamlit = "^1.28.0"
+plotly = "^5.17.0"
+dash = "^2.14.0"
+kafka-python = "^2.0.2"
+websockets = "^12.0"
+redis = "^5.0.0"
+psycopg2-binary = "^2.9.9"
+sqlalchemy = "^2.0.23"
+alembic = "^1.13.0"
+celery = "^5.3.4"
+dask = {extras = ["complete"], version = "^2023.11.0"}
+pydantic = "^2.5.0"
+pydantic-settings = "^2.1.0"
+pyjwt = {extras = ["crypto"], version = "^2.8.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+python-multipart = "^0.0.6"
+yfinance = "^0.2.18"
+requests = "^2.31.0"
+aiohttp = "^3.9.0"
+httpx = "^0.25.2"
+tweepy = "^4.14.0"
+python-dotenv = "^1.0.0"
+prometheus-client = "^0.19.0"
+structlog = "^23.2.0"
+typer = "^0.9.0"
+rich = "^13.7.0"
+tqdm = "^4.66.1"
+joblib = "^1.3.2"
+networkx = "^3.2.1"
+sympy = "^1.12"
+statsmodels = "^0.14.0"
+arch = "^6.2.0"
+pycryptodome = "^3.19.0"
+web3 = "^6.12.0"
+py-solc-x = "^2.0.2"
+
+[tool.poetry.group.gpu.dependencies]
+cupy-cuda12x = "^12.3.0"
+numba = "^0.58.0"
+rapids-cudf = {version = "^23.12.0", optional = true}
+
+[tool.poetry.group.quantum.dependencies]
+qiskit = "^0.45.0"
+qiskit-aer = "^0.13.0"
+qiskit-ibm-runtime = "^0.17.0"
+cirq = "^1.2.0"
+cirq-google = "^1.2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+pytest-asyncio = "^0.21.0"
+pytest-mock = "^3.12.0"
+pytest-benchmark = "^4.0.0"
+black = "^23.11.0"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
+mypy = "^1.7.0"
+pre-commit = "^3.6.0"
+bandit = "^1.7.5"
+safety = "^2.3.5"
+sphinx = "^7.2.0"
+sphinx-rtd-theme = "^1.3.0"
+notebook = "^7.0.6"
+ipykernel = "^6.26.0"
+
+[tool.poetry.extras]
+gpu = ["cupy-cuda12x", "numba"]
+quantum = ["qiskit", "qiskit-aer", "qiskit-ibm-runtime", "cirq", "cirq-google"]
+all = ["cupy-cuda12x", "numba", "qiskit", "qiskit-aer", "qiskit-ibm-runtime", "cirq", "cirq-google"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "quantum: marks tests that require quantum backend",
+    "benchmark: marks performance benchmark tests",
+    "integration: marks integration tests",
+    "unit: marks unit tests"
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/site-packages/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError"
+]
