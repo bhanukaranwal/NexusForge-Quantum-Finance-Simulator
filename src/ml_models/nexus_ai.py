@@ -507,4 +507,556 @@ class EvolutionaryEngine:
         }
 
 
-class FederatedLearningNode
+class FederatedLearningNode:
+    """Federated learning node for distributed strategy evolution"""
+    
+    def __init__(self, node_id: str, config: NexusAIConfig):
+        self.node_id = node_id
+        self.config = config
+        self.local_population: List[Strategy] = []
+        self.global_model_weights = None
+        self.communication_round = 0
+        self.logger = logger.bind(component="FederatedLearningNode", node_id=node_id)
+    
+    async def local_training(self, market_data: pd.DataFrame, epochs: int = 10) -> Dict[str, Any]:
+        """Perform local training on node-specific data"""
+        engine = EvolutionaryEngine(self.config)
+        engine.population = self.local_population
+        
+        results = []
+        for epoch in range(epochs):
+            result = engine.evolve_generation(market_data)
+            results.append(result)
+            
+            self.logger.info(f"Local epoch {epoch}: best_fitness={result['best_fitness']:.4f}")
+        
+        self.local_population = engine.population
+        return {
+            'node_id': self.node_id,
+            'epochs': epochs,
+            'final_best_fitness': results[-1]['best_fitness'],
+            'results': results
+        }
+    
+    def aggregate_strategies(self, global_strategies: List[Strategy]) -> None:
+        """Aggregate global strategies with local population"""
+        # Replace worst local strategies with best global ones
+        self.local_population.sort(key=lambda s: s.fitness, reverse=True)
+        global_strategies.sort(key=lambda s: s.fitness, reverse=True)
+        
+        # Replace bottom 20% with top global strategies
+        replace_count = int(len(self.local_population) * 0.2)
+        self.local_population[-replace_count:] = global_strategies[:replace_count]
+        
+        self.communication_round += 1
+        self.logger.info(f"Aggregated strategies in round {self.communication_round}")
+
+
+class NexusAI:
+    """Main NexusAI class orchestrating autonomous strategy evolution"""
+    
+    def __init__(self, config: Union[NexusAIConfig, Dict]):
+        if isinstance(config, dict):
+            config = NexusAIConfig(**config)
+        
+        self.config = config
+        self.evolutionary_engine = EvolutionaryEngine(config)
+        self.federated_nodes: Dict[str, FederatedLearningNode] = {}
+        self.strategy_memory: List[Strategy] = []
+        self.performance_history = []
+        self.market_regime_detector = None
+        self.adaptive_parameters = {}
+        self.logger = logger.bind(component="NexusAI")
+        
+    async def initialize(self, market_data: pd.DataFrame) -> None:
+        """Initialize NexusAI system"""
+        self.logger.info("Initializing NexusAI autonomous system")
+        
+        # Initialize evolutionary engine
+        self.evolutionary_engine.initialize_population()
+        
+        # Initialize market regime detection
+        await self._initialize_regime_detection(market_data)
+        
+        # Initialize adaptive parameters
+        self._initialize_adaptive_parameters()
+        
+        self.logger.info("NexusAI initialization completed")
+    
+    async def _initialize_regime_detection(self, market_data: pd.DataFrame) -> None:
+        """Initialize market regime detection for adaptive behavior"""
+        from src.ml_models.regime_detection import RegimeDetector, RegimeDetectionConfig
+        
+        regime_config = RegimeDetectionConfig(
+            n_regimes=3,
+            method="hmm",
+            features=["returns", "volatility", "volume_ratio"]
+        )
+        
+        self.market_regime_detector = RegimeDetector(regime_config)
+        
+        # Prepare data for regime detection
+        regime_data = market_data.copy()
+        regime_data['returns'] = regime_data['close'].pct_change()
+        regime_data['volatility'] = regime_data['returns'].rolling(20).std()
+        
+        if 'volume' in regime_data.columns:
+            regime_data['volume_ma'] = regime_data['volume'].rolling(20).mean()
+            regime_data['volume_ratio'] = regime_data['volume'] / regime_data['volume_ma']
+        else:
+            regime_data['volume_ratio'] = 1.0
+        
+        # Fit regime detector
+        await self.market_regime_detector.fit_predict(regime_data.dropna())
+    
+    def _initialize_adaptive_parameters(self) -> None:
+        """Initialize adaptive parameters for dynamic optimization"""
+        self.adaptive_parameters = {
+            'learning_rate': 0.1,
+            'exploration_rate': 0.3,
+            'selection_pressure': 1.0,
+            'mutation_intensity': 1.0,
+            'diversity_target': 0.5,
+            'performance_threshold': 0.1
+        }
+    
+    async def evolve(self, market_data: pd.DataFrame, generations: int = None) -> Dict[str, Any]:
+        """Main evolution loop with adaptive behavior"""
+        if generations is None:
+            generations = self.config.max_generations
+        
+        self.logger.info(f"Starting evolution for {generations} generations")
+        
+        evolution_results = []
+        best_strategy_history = []
+        
+        for generation in range(generations):
+            # Detect current market regime
+            current_regime = await self._detect_current_regime(market_data)
+            
+            # Adapt parameters based on regime
+            await self._adapt_parameters(current_regime, generation)
+            
+            # Evolve generation
+            result = self.evolutionary_engine.evolve_generation(market_data)
+            evolution_results.append(result)
+            
+            # Track best strategy
+            best_strategy = self.evolutionary_engine.population[0]
+            best_strategy_history.append(best_strategy)
+            
+            # Update strategy memory
+            self._update_strategy_memory(best_strategy)
+            
+            # Check for convergence
+            if self._check_convergence():
+                self.logger.info(f"Convergence achieved at generation {generation}")
+                break
+            
+            # Adaptive learning
+            if self.config.adaptive_learning:
+                await self._adaptive_learning_update(result)
+            
+            if generation % 10 == 0:
+                self.logger.info(
+                    f"Generation {generation}: "
+                    f"best_fitness={result['best_fitness']:.4f}, "
+                    f"diversity={result['diversity']:.4f}, "
+                    f"regime={current_regime}"
+                )
+        
+        # Final evaluation
+        final_result = await self._final_evaluation(market_data, best_strategy_history)
+        
+        return {
+            'generations_completed': len(evolution_results),
+            'evolution_results': evolution_results,
+            'best_strategy': self.evolutionary_engine.population[0],
+            'final_evaluation': final_result,
+            'adaptive_parameters': self.adaptive_parameters
+        }
+    
+    async def _detect_current_regime(self, market_data: pd.DataFrame) -> int:
+        """Detect current market regime"""
+        if self.market_regime_detector is None:
+            return 0  # Default regime
+        
+        try:
+            # Use last window of data for regime detection
+            recent_data = market_data.tail(self.config.fitness_window)
+            result = await self.market_regime_detector.predict_regime(recent_data)
+            return int(result['regimes'][-1])
+        except Exception as e:
+            self.logger.warning(f"Regime detection failed: {e}")
+            return 0
+    
+    async def _adapt_parameters(self, regime: int, generation: int) -> None:
+        """Adapt evolution parameters based on market regime and progress"""
+        # Regime-based adaptation
+        if regime == 0:  # Bull market
+            self.adaptive_parameters['exploration_rate'] = 0.2
+            self.adaptive_parameters['mutation_intensity'] = 0.8
+        elif regime == 1:  # Bear market
+            self.adaptive_parameters['exploration_rate'] = 0.4
+            self.adaptive_parameters['mutation_intensity'] = 1.2
+        else:  # Sideways market
+            self.adaptive_parameters['exploration_rate'] = 0.3
+            self.adaptive_parameters['mutation_intensity'] = 1.0
+        
+        # Progress-based adaptation
+        progress = generation / self.config.max_generations
+        self.adaptive_parameters['exploration_rate'] *= (1 - progress * 0.5)  # Decrease exploration
+        
+        # Update evolutionary engine parameters
+        self.evolutionary_engine.config.mutation_rate = (
+            self.config.mutation_rate * self.adaptive_parameters['mutation_intensity']
+        )
+    
+    def _update_strategy_memory(self, strategy: Strategy) -> None:
+        """Update long-term strategy memory"""
+        self.strategy_memory.append(strategy)
+        
+        # Keep only best strategies in memory
+        if len(self.strategy_memory) > self.config.memory_length:
+            self.strategy_memory.sort(key=lambda s: s.fitness, reverse=True)
+            self.strategy_memory = self.strategy_memory[:self.config.memory_length]
+    
+    def _check_convergence(self) -> bool:
+        """Check if evolution has converged"""
+        if len(self.evolutionary_engine.best_fitness_history) < 10:
+            return False
+        
+        recent_fitness = self.evolutionary_engine.best_fitness_history[-10:]
+        fitness_improvement = max(recent_fitness) - min(recent_fitness)
+        
+        return fitness_improvement < self.config.convergence_threshold
+    
+    async def _adaptive_learning_update(self, result: Dict[str, Any]) -> None:
+        """Update adaptive parameters based on evolution performance"""
+        # Adjust learning rate based on diversity
+        if result['diversity'] < self.adaptive_parameters['diversity_target']:
+            self.adaptive_parameters['mutation_intensity'] *= 1.1  # Increase mutation
+        else:
+            self.adaptive_parameters['mutation_intensity'] *= 0.95  # Decrease mutation
+        
+        # Adjust selection pressure based on improvement
+        if len(self.evolutionary_engine.best_fitness_history) >= 2:
+            improvement = (
+                self.evolutionary_engine.best_fitness_history[-1] -
+                self.evolutionary_engine.best_fitness_history[-2]
+            )
+            
+            if improvement > self.adaptive_parameters['performance_threshold']:
+                self.adaptive_parameters['selection_pressure'] *= 1.05
+            else:
+                self.adaptive_parameters['selection_pressure'] *= 0.98
+    
+    async def _final_evaluation(self, market_data: pd.DataFrame, strategy_history: List[Strategy]) -> Dict[str, Any]:
+        """Perform final evaluation of evolved strategies"""
+        best_strategy = self.evolutionary_engine.population[0]
+        
+        # Evaluate on full dataset
+        full_performance = self.evolutionary_engine._simulate_strategy(
+            self.evolutionary_engine._genes_to_parameters(best_strategy.genes),
+            market_data
+        )
+        
+        # Calculate strategy stability
+        stability_score = self._calculate_strategy_stability(strategy_history)
+        
+        # Generate strategy interpretation
+        interpretation = await self._interpret_strategy(best_strategy)
+        
+        return {
+            'best_strategy_performance': full_performance.dict(),
+            'strategy_stability': stability_score,
+            'strategy_interpretation': interpretation,
+            'total_strategies_evaluated': len(self.strategy_memory),
+            'convergence_generation': len(self.evolutionary_engine.best_fitness_history)
+        }
+    
+    def _calculate_strategy_stability(self, strategy_history: List[Strategy]) -> float:
+        """Calculate stability of strategy evolution"""
+        if len(strategy_history) < 5:
+            return 0.0
+        
+        # Calculate gene variance over time
+        gene_variances = []
+        for gene_idx in range(len(strategy_history[0].genes)):
+            gene_values = [s.genes[gene_idx] for s in strategy_history[-10:]]
+            gene_variances.append(np.var(gene_values))
+        
+        # Lower variance indicates higher stability
+        stability = 1.0 / (1.0 + np.mean(gene_variances))
+        return stability
+    
+    async def _interpret_strategy(self, strategy: Strategy) -> Dict[str, Any]:
+        """Generate human-readable interpretation of strategy"""
+        params = self.evolutionary_engine._genes_to_parameters(strategy.genes)
+        
+        interpretation = {
+            'strategy_type': self._classify_strategy_type(params),
+            'key_parameters': self._extract_key_parameters(params),
+            'trading_style': self._determine_trading_style(params),
+            'risk_profile': self._assess_risk_profile(params),
+            'market_conditions': self._preferred_market_conditions(params)
+        }
+        
+        return interpretation
+    
+    def _classify_strategy_type(self, params: Dict[str, float]) -> str:
+        """Classify strategy based on parameters"""
+        if params['ma_short_period'] < 20 and params['ma_long_period'] < 100:
+            return "Short-term Momentum"
+        elif params['rsi_oversold'] < 25 and params['rsi_overbought'] > 75:
+            return "Mean Reversion"
+        elif params['trend_strength'] > 0.7:
+            return "Trend Following"
+        elif params['volatility_adj'] > 0.8:
+            return "Volatility Adaptive"
+        else:
+            return "Hybrid Strategy"
+    
+    def _extract_key_parameters(self, params: Dict[str, float]) -> Dict[str, float]:
+        """Extract most important parameters"""
+        return {
+            'short_ma_period': params['ma_short_period'],
+            'long_ma_period': params['ma_long_period'],
+            'rsi_period': params['rsi_period'],
+            'stop_loss': params['stop_loss'],
+            'take_profit': params['take_profit'],
+            'position_size': params['position_size']
+        }
+    
+    def _determine_trading_style(self, params: Dict[str, float]) -> str:
+        """Determine trading style characteristics"""
+        avg_holding_period = (params['ma_short_period'] + params['ma_long_period']) / 2
+        
+        if avg_holding_period < 10:
+            return "High Frequency"
+        elif avg_holding_period < 50:
+            return "Short Term"
+        elif avg_holding_period < 150:
+            return "Medium Term"
+        else:
+            return "Long Term"
+    
+    def _assess_risk_profile(self, params: Dict[str, float]) -> str:
+        """Assess risk profile of strategy"""
+        risk_score = (
+            params['stop_loss'] * 0.4 +
+            params['position_size'] * 0.3 +
+            (1 - params['volatility_adj']) * 0.3
+        )
+        
+        if risk_score < 0.3:
+            return "Conservative"
+        elif risk_score < 0.6:
+            return "Moderate"
+        else:
+            return "Aggressive"
+    
+    def _preferred_market_conditions(self, params: Dict[str, float]) -> List[str]:
+        """Determine preferred market conditions"""
+        conditions = []
+        
+        if params['trend_strength'] > 0.7:
+            conditions.append("Trending Markets")
+        
+        if params['rsi_oversold'] < 25:
+            conditions.append("High Volatility")
+        
+        if params['volume_threshold'] > 1.5:
+            conditions.append("High Volume")
+        
+        if params['regime_sensitivity'] > 0.7:
+            conditions.append("Regime Changes")
+        
+        return conditions if conditions else ["All Market Conditions"]
+    
+    async def federated_evolution(self, node_data: Dict[str, pd.DataFrame], rounds: int = 10) -> Dict[str, Any]:
+        """Perform federated evolution across multiple nodes"""
+        self.logger.info(f"Starting federated evolution with {len(node_data)} nodes")
+        
+        # Initialize federated nodes
+        for node_id, data in node_data.items():
+            node = FederatedLearningNode(node_id, self.config)
+            node.local_population = self.evolutionary_engine.population[:self.config.population_size // len(node_data)]
+            self.federated_nodes[node_id] = node
+        
+        federated_results = []
+        
+        for round_num in range(rounds):
+            self.logger.info(f"Federated round {round_num + 1}/{rounds}")
+            
+            # Local training on each node
+            local_results = {}
+            for node_id, node in self.federated_nodes.items():
+                result = await node.local_training(node_data[node_id], epochs=5)
+                local_results[node_id] = result
+            
+            # Aggregate strategies
+            all_strategies = []
+            for node in self.federated_nodes.values():
+                all_strategies.extend(node.local_population)
+            
+            # Select best global strategies
+            all_strategies.sort(key=lambda s: s.fitness, reverse=True)
+            global_best = all_strategies[:self.config.population_size // 4]
+            
+            # Distribute to all nodes
+            for node in self.federated_nodes.values():
+                node.aggregate_strategies(global_best)
+            
+            # Track round results
+            round_result = {
+                'round': round_num + 1,
+                'local_results': local_results,
+                'global_best_fitness': global_best[0].fitness if global_best else 0,
+                'total_strategies': len(all_strategies)
+            }
+            federated_results.append(round_result)
+        
+        # Final aggregation
+        final_population = []
+        for node in self.federated_nodes.values():
+            final_population.extend(node.local_population)
+        
+        final_population.sort(key=lambda s: s.fitness, reverse=True)
+        self.evolutionary_engine.population = final_population[:self.config.population_size]
+        
+        return {
+            'federated_rounds': rounds,
+            'participating_nodes': list(node_data.keys()),
+            'round_results': federated_results,
+            'final_best_strategy': final_population[0] if final_population else None,
+            'total_strategies_evolved': len(final_population)
+        }
+    
+    async def real_time_adaptation(self, live_data_stream: Any) -> None:
+        """Continuously adapt strategies to live market data"""
+        self.logger.info("Starting real-time adaptation mode")
+        
+        adaptation_buffer = []
+        adaptation_frequency = 100  # Adapt every 100 data points
+        
+        async for data_point in live_data_stream:
+            adaptation_buffer.append(data_point)
+            
+            if len(adaptation_buffer) >= adaptation_frequency:
+                # Convert buffer to DataFrame
+                recent_data = pd.DataFrame(adaptation_buffer)
+                
+                # Quick evolution cycle
+                quick_result = self.evolutionary_engine.evolve_generation(recent_data)
+                
+                # Update best strategy if improvement found
+                if quick_result['best_fitness'] > self.adaptive_parameters.get('last_best_fitness', 0):
+                    self.adaptive_parameters['last_best_fitness'] = quick_result['best_fitness']
+                    self.logger.info(f"Real-time adaptation: new best fitness {quick_result['best_fitness']:.4f}")
+                
+                # Keep only recent data
+                adaptation_buffer = adaptation_buffer[-50:]
+    
+    def get_current_best_strategy(self) -> Dict[str, Any]:
+        """Get current best strategy with interpretation"""
+        if not self.evolutionary_engine.population:
+            return {}
+        
+        best_strategy = self.evolutionary_engine.population[0]
+        params = self.evolutionary_engine._genes_to_parameters(best_strategy.genes)
+        
+        return {
+            'strategy_id': best_strategy.id,
+            'fitness': best_strategy.fitness,
+            'parameters': params,
+            'interpretation': asyncio.run(self._interpret_strategy(best_strategy)),
+            'age': best_strategy.age,
+            'performance_stats': {
+                'wins': best_strategy.wins,
+                'losses': best_strategy.losses,
+                'total_trades': best_strategy.total_trades
+            }
+        }
+    
+    def save_nexus_state(self, path: str) -> None:
+        """Save complete NexusAI state"""
+        state_data = {
+            'config': self.config.dict(),
+            'population': [
+                {
+                    'id': s.id,
+                    'genes': s.genes,
+                    'fitness': s.fitness,
+                    'age': s.age,
+                    'wins': s.wins,
+                    'losses': s.losses,
+                    'total_trades': s.total_trades,
+                    'created_at': s.created_at.isoformat() if s.created_at else None
+                }
+                for s in self.evolutionary_engine.population
+            ],
+            'strategy_memory': [
+                {
+                    'id': s.id,
+                    'genes': s.genes,
+                    'fitness': s.fitness,
+                    'age': s.age
+                }
+                for s in self.strategy_memory
+            ],
+            'adaptive_parameters': self.adaptive_parameters,
+            'generation': self.evolutionary_engine.generation,
+            'best_fitness_history': self.evolutionary_engine.best_fitness_history,
+            'diversity_history': self.evolutionary_engine.diversity_history
+        }
+        
+        with open(path, 'w') as f:
+            json.dump(state_data, f, indent=2)
+        
+        self.logger.info(f"NexusAI state saved to {path}")
+    
+    def load_nexus_state(self, path: str) -> None:
+        """Load complete NexusAI state"""
+        with open(path, 'r') as f:
+            state_data = json.load(f)
+        
+        self.config = NexusAIConfig(**state_data['config'])
+        
+        # Restore population
+        population = []
+        for s_data in state_data['population']:
+            strategy = Strategy(
+                id=s_data['id'],
+                genes=s_data['genes'],
+                fitness=s_data['fitness'],
+                age=s_data['age'],
+                wins=s_data['wins'],
+                losses=s_data['losses'],
+                total_trades=s_data['total_trades'],
+                created_at=datetime.fromisoformat(s_data['created_at']) if s_data['created_at'] else None
+            )
+            population.append(strategy)
+        
+        # Restore strategy memory
+        memory = []
+        for s_data in state_data['strategy_memory']:
+            strategy = Strategy(
+                id=s_data['id'],
+                genes=s_data['genes'],
+                fitness=s_data['fitness'],
+                age=s_data['age']
+            )
+            memory.append(strategy)
+        
+        self.evolutionary_engine = EvolutionaryEngine(self.config)
+        self.evolutionary_engine.population = population
+        self.evolutionary_engine.generation = state_data['generation']
+        self.evolutionary_engine.best_fitness_history = state_data['best_fitness_history']
+        self.evolutionary_engine.diversity_history = state_data['diversity_history']
+        
+        self.strategy_memory = memory
+        self.adaptive_parameters = state_data['adaptive_parameters']
+        
+        self.logger.info(f"NexusAI state loaded from {path}")
+
